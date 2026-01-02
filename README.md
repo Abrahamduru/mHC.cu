@@ -1,5 +1,5 @@
 # mHC.cu
-CUDA implementation of Manifold-Constrained Hyper-Connections (mHC)
+unofficial CUDA implementation of mHC: Manifold-Constrained Hyper-Connections by DeepseekAI
 
 ## Build
 
@@ -13,48 +13,43 @@ For multi-architecture builds:
 cmake -B build -DCMAKE_CUDA_ARCHITECTURES="80;86;89;90;100"
 ```
 
-## Run Tests
+## Tests
 
+### Forward Pass
 ```bash
 ./build/test_rmsnorm
 ./build/test_sinkhorn_knopp
 ./build/test_stream_mix_tc
+./build/test_fused_rmsnorm_matmul
 ./build/test_mhc_layer
 ```
 
-## Run Benchmarks
+### Backward Pass
+```bash
+./build/test_rmsnorm_backward
+./build/test_fused_rmsnorm_matmul_backward
+./build/test_stream_aggregate_backward
+./build/test_stream_distribute_backward
+./build/test_stream_mix_backward
+```
 
+## Benchmarks
+
+### Forward Pass
 ```bash
 ./build/bench_rmsnorm
 ./build/bench_sinkhorn_knopp
-./build/bench_mhc_layer
 ./build/bench_fused_rmsnorm_matmul
-./build/bench_stream_ops_backward
+./build/bench_stream_ops
+./build/bench_mhc_layer
+```
+
+### Backward Pass
+```bash
 ./build/bench_rmsnorm_backward
-```
-
-## Contributing
-
-### Pre-commit Hook
-
-This project uses a pre-commit hook to automatically format code using the rules in `.clang-format` and run tests before each commit.
-
-**Setup:**
-```bash
-git config core.hooksPath .githooks
-chmod +x .githooks/pre-commit
-```
-
-**Process:**
-1. Runs `clang-format` on all staged `.cu` and `.cuh` files
-2. Builds the project
-3. Runs all tests
-
-If any step fails, the commit will be aborted.
-
-**Format Manually:**
-```bash
-find csrc -name "*.cu" -o -name "*.cuh" | xargs clang-format -i
+./build/bench_sinkhorn_knopp_backward
+./build/bench_fused_rmsnorm_matmul_backward
+./build/bench_stream_ops_backward
 ```
 
 ## Paper
