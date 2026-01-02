@@ -31,6 +31,17 @@ make bench        # run all C++ / CUDA benchmarks
 make bench-python # run all Python benchmarks
 ```
 
+### Pytorch Benchmark Results (benchmarked on H100 SXM5)
+
+Fused mHC vs naive PyTorch mHC implementation (configs from paper Appendix A in section A.1):
+
+| Batch | Hidden | n | Forward | Backward |
+|-------|--------|---|---------|----------|
+| 320   | 1280   | 4 | 10.4x   | 7.1x     |
+| 512   | 1920   | 4 | 7.0x    | 5.6x     |
+| 1280  | 2560   | 4 | 4.0x    | 2.6x     |
+| 2560  | 1280   | 4 | 4.0x    | 2.6x     |
+
 ## Format
 
 ```bash

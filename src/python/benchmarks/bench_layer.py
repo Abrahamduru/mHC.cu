@@ -184,7 +184,7 @@ def main():
     from mhc import MHCLayer
 
     if args.all_configs:
-        # configs are from paper Appendix A, Table 3: model specs
+        # configs are from paper Appendix A in section A.1: model specs
         # (batch, hidden_dim, expansion_rate)
         configs = [
             (320, 1280, 4),
