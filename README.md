@@ -33,14 +33,26 @@ make bench-python # run all Python benchmarks
 
 ### Pytorch Benchmark Results (benchmarked on H100 SXM5)
 
-Fused mHC vs naive PyTorch mHC implementation (configs from paper Appendix A in section A.1):
+Fused mHC vs naive PyTorch mHC implementation (configs from paper Appendix A 
+in section A.1):
+
+**Static H Path** (shared H across batch):
 
 | Batch | Hidden | n | Forward | Backward |
 |-------|--------|---|---------|----------|
-| 320   | 1280   | 4 | 10.4x   | 9.3x     |
-| 512   | 1920   | 4 | 7.0x    | 5.9x     |
-| 1280  | 2560   | 4 | 4.0x    | 2.6x     |
-| 2560  | 1280   | 4 | 4.0x    | 2.6x     |
+| 320   | 1280   | 4 | 14.5x   | 10.9x    |
+| 512   | 1920   | 4 | 11.7x   | 7.9x     |
+| 1280  | 2560   | 4 | 8.0x    | 3.7x     |
+| 2560  | 1280   | 4 | 7.9x    | 3.6x     |
+
+**Dynamic H Path** (per-batch H values -> this matches paper architecture as presented in Equations 5-10):
+
+| Batch | Hidden | n | Forward | Backward |
+|-------|--------|---|---------|----------|
+| 320   | 1280   | 4 | 6.3x    | 10.3x    |
+| 512   | 1920   | 4 | 5.7x    | 8.2x     |
+| 1280  | 2560   | 4 | 3.8x    | 4.5x     |
+| 2560  | 1280   | 4 | 3.8x    | 4.4x     |
 
 ## Format
 
@@ -54,9 +66,15 @@ make format       # clang-format + python black formatting
 import torch
 from mhc import MHCLayer
 
+# Dynamic H path (default, matches paper architecture)
+# H values are computed from x via learned projections
 layer = MHCLayer(hidden_dim=4096, expansion_rate=4).cuda()
 x = torch.randn(8, 4, 4096, device="cuda")  # [B, n, C]
 y = layer(x)  # [B, n, C]
+
+# Static H path (shared H across batch, faster for inference)
+layer_static = MHCLayer(hidden_dim=4096, expansion_rate=4, use_dynamic_h=False).cuda()
+y = layer_static(x)
 ```
 
 ## Contributing
