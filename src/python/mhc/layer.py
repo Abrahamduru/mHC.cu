@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from .ops import mhc_layer_fused, mhc_layer_fused_dynamic
+from .ops import mhc_layer_fused, mhc_layer_fused_dynamic, mhc_layer_fused_inference
 
 
 class MHCLayer(nn.Module):
@@ -80,6 +80,16 @@ class MHCLayer(nn.Module):
                 self.eps,
             )
         else:
+            if not self.training and not torch.is_grad_enabled():
+                return mhc_layer_fused_inference(
+                    x_expanded,
+                    self.rmsnorm_weight,
+                    self.H_pre,
+                    self.H_post,
+                    self.H_res,
+                    self.sinkhorn_iters,
+                    self.eps,
+                )
             return mhc_layer_fused(
                 x_expanded,
                 self.rmsnorm_weight,

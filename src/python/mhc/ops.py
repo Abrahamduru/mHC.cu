@@ -136,6 +136,21 @@ def mhc_layer_fused(
     )
 
 
+def mhc_layer_fused_inference(
+    x_expanded, rmsnorm_weight, H_pre, H_post, H_res, sinkhorn_iters=20, eps=1e-5
+):
+    # inference focused forward pass -> no backward support for maximum speed
+    return mhc_cuda.mhc_layer_fwd_inference(
+        x_expanded.float().contiguous(),
+        rmsnorm_weight.bfloat16().contiguous(),
+        H_pre.float().contiguous(),
+        H_post.float().contiguous(),
+        H_res.float().contiguous(),
+        sinkhorn_iters,
+        eps,
+    )
+
+
 class MHCLayerDynamicFunction(Function):
     @staticmethod
     def forward(

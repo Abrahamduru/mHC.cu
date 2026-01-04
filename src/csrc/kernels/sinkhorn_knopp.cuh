@@ -372,7 +372,8 @@ __global__ void sinkhorn_knopp_single_block_fused_exp_kernel(float* __restrict__
     for (int i = threadIdx.x; i < total_elems; i += BLOCK_SIZE) {
         float val = fast_exp(inp[i]);
         tile[i] = val;
-        H_res_exp[i] = val;
+        if (H_res_exp)
+            H_res_exp[i] = val;
     }
     __syncthreads();
 
@@ -1095,7 +1096,7 @@ inline void sinkhorn_knopp_forward_batched(float* out, const float* inp, int B, 
     }
 
     constexpr int BLOCK_SIZE = 128;
-    constexpr int N_MAX = 16;
+    constexpr int N_MAX = 32;
 
     if (n > N_MAX) {
         for (int b = 0; b < B; b++) {

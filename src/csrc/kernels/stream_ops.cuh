@@ -52,6 +52,47 @@ __global__ void stream_aggregate_bf16_fused_sigmoid_kernel(floatX* __restrict__ 
 }
 
 template<int BLOCK_SIZE, int MAX_N>
+__global__ void stream_aggregate_bf16_fused_sigmoid_vec4_kernel(floatX* __restrict__ out,
+                                                                float* __restrict__ H_pre_activated,
+                                                                const float* __restrict__ inp,
+                                                                const float* __restrict__ H_pre_raw,
+                                                                int B, int n, int C) {
+    __shared__ float s_H_pre[MAX_N];
+    if (threadIdx.x < n) {
+        float activated = fast_sigmoid(H_pre_raw[threadIdx.x]);
+        s_H_pre[threadIdx.x] = activated;
+        H_pre_activated[threadIdx.x] = activated;
+    }
+    __syncthreads();
+
+    int idx4 = blockIdx.x * BLOCK_SIZE + threadIdx.x;
+    int C4 = C / 4;
+    if (idx4 >= B * C4)
+        return;
+
+    int b = idx4 / C4;
+    int c4 = idx4 % C4;
+    int c = c4 * 4;
+
+    float4 sum = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+#pragma unroll
+    for (int i = 0; i < MAX_N; i++) {
+        if (i < n) {
+            float h = s_H_pre[i];
+            const float4* inp4 = reinterpret_cast<const float4*>(&inp[b * n * C + i * C + c]);
+            float4 v = *inp4;
+            sum.x += h * v.x;
+            sum.y += h * v.y;
+            sum.z += h * v.z;
+            sum.w += h * v.w;
+        }
+    }
+    __nv_bfloat162* out2 = reinterpret_cast<__nv_bfloat162*>(&out[b * C + c]);
+    out2[0] = __floats2bfloat162_rn(sum.x, sum.y);
+    out2[1] = __floats2bfloat162_rn(sum.z, sum.w);
+}
+
+template<int BLOCK_SIZE, int MAX_N>
 __global__ void stream_distribute_from_bf16_fused_sigmoid_kernel(
     float* __restrict__ out, float* __restrict__ H_post_activated, const floatX* __restrict__ inp,
     const float* __restrict__ H_post_raw, int B, int n, int C) {
@@ -198,32 +239,31 @@ __global__ void stream_mix_large_kernel(float* __restrict__ out, const float* __
     out[idx] = sum;
 }
 
-template<int BLOCK_SIZE>
-__global__ void transpose_BnC_to_nBC_colmajor_kernel(float* __restrict__ out,
-                                                     const float* __restrict__ inp, int B, int n,
-                                                     int C) {
-    int idx = blockIdx.x * BLOCK_SIZE + threadIdx.x;
-    if (idx >= B * n * C)
-        return;
-    int b = idx / (n * C);
-    int remainder = idx % (n * C);
-    int i = remainder / C;
-    int c = remainder % C;
-    out[i * B * C + c * B + b] = inp[idx];
-}
+template<int BLOCK_SIZE, int MAX_N>
+__global__ void
+distribute_add_fused_kernel(float* __restrict__ out, float* __restrict__ H_post_activated,
+                            const float* __restrict__ mix_out, const floatX* __restrict__ y_norm,
+                            const float* __restrict__ H_post_raw, int B, int n, int C) {
+    __shared__ float s_H_post[MAX_N];
+    if (threadIdx.x < n) {
+        float activated = 2.0f * fast_sigmoid(H_post_raw[threadIdx.x]);
+        s_H_post[threadIdx.x] = activated;
+        H_post_activated[threadIdx.x] = activated;
+    }
+    __syncthreads();
 
-template<int BLOCK_SIZE>
-__global__ void transpose_nBC_colmajor_to_BnC_kernel(float* __restrict__ out,
-                                                     const float* __restrict__ inp, int B, int n,
-                                                     int C) {
     int idx = blockIdx.x * BLOCK_SIZE + threadIdx.x;
     if (idx >= B * n * C)
         return;
+
     int b = idx / (n * C);
     int remainder = idx % (n * C);
     int i = remainder / C;
     int c = remainder % C;
-    out[idx] = inp[i * B * C + c * B + b];
+
+    float mix_val = mix_out[idx];
+    float dist_val = s_H_post[i] * (float)y_norm[b * C + c];
+    out[idx] = mix_val + dist_val;
 }
 
 class StreamMixTC {
@@ -231,7 +271,10 @@ class StreamMixTC {
     cublasLtHandle_t handle;
     cublasLtMatmulDesc_t matmulDesc;
     cublasLtMatrixLayout_t Mdesc, Xdesc, Ydesc;
-    float *X_transposed, *Y_transposed;
+    cublasLtMatmulPreference_t preference;
+    cublasLtMatmulHeuristicResult_t heuristic;
+    void* workspace;
+    size_t workspace_size;
     int B, n, C;
     bool initialized = false;
 
@@ -239,40 +282,73 @@ class StreamMixTC {
         B = B_;
         n = n_;
         C = C_;
+        workspace_size = 4 * 1024 * 1024;
+
         cublasLtCreate(&handle);
         cublasLtMatmulDescCreate(&matmulDesc, CUBLAS_COMPUTE_32F_FAST_TF32, CUDA_R_32F);
+
+        cublasOperation_t trans_a = CUBLAS_OP_N;
+        cublasOperation_t trans_b = CUBLAS_OP_T;
+        cublasLtMatmulDescSetAttribute(matmulDesc, CUBLASLT_MATMUL_DESC_TRANSA, &trans_a,
+                                       sizeof(trans_a));
+        cublasLtMatmulDescSetAttribute(matmulDesc, CUBLASLT_MATMUL_DESC_TRANSB, &trans_b,
+                                       sizeof(trans_b));
+
+        cublasLtOrder_t row_order = CUBLASLT_ORDER_ROW;
+        cublasLtMatrixLayoutCreate(&Xdesc, CUDA_R_32F, B * C, n, n);
+        cublasLtMatrixLayoutSetAttribute(Xdesc, CUBLASLT_MATRIX_LAYOUT_ORDER, &row_order,
+                                         sizeof(row_order));
         cublasLtMatrixLayoutCreate(&Mdesc, CUDA_R_32F, n, n, n);
-        cublasLtMatrixLayoutCreate(&Xdesc, CUDA_R_32F, n, B * C, n);
-        cublasLtMatrixLayoutCreate(&Ydesc, CUDA_R_32F, n, B * C, n);
-        cudaMalloc(&X_transposed, B * n * C * sizeof(float));
-        cudaMalloc(&Y_transposed, B * n * C * sizeof(float));
+        cublasLtMatrixLayoutSetAttribute(Mdesc, CUBLASLT_MATRIX_LAYOUT_ORDER, &row_order,
+                                         sizeof(row_order));
+        cublasLtMatrixLayoutCreate(&Ydesc, CUDA_R_32F, B * C, n, n);
+        cublasLtMatrixLayoutSetAttribute(Ydesc, CUBLASLT_MATRIX_LAYOUT_ORDER, &row_order,
+                                         sizeof(row_order));
+
+        cublasLtMatmulPreferenceCreate(&preference);
+        cublasLtMatmulPreferenceSetAttribute(preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
+                                             &workspace_size, sizeof(workspace_size));
+
+        int returned_results = 0;
+        cublasLtMatmulAlgoGetHeuristic(handle, matmulDesc, Xdesc, Mdesc, Ydesc, Ydesc, preference,
+                                       1, &heuristic, &returned_results);
+
+        cudaMalloc(&workspace, workspace_size);
         initialized = true;
     }
 
     void destroy() {
         if (!initialized)
             return;
+        cublasLtMatmulPreferenceDestroy(preference);
         cublasLtMatrixLayoutDestroy(Mdesc);
         cublasLtMatrixLayoutDestroy(Xdesc);
         cublasLtMatrixLayoutDestroy(Ydesc);
         cublasLtMatmulDescDestroy(matmulDesc);
         cublasLtDestroy(handle);
-        cudaFree(X_transposed);
-        cudaFree(Y_transposed);
+        cudaFree(workspace);
         initialized = false;
     }
 
     void forward(float* out, const float* inp, const float* M, cudaStream_t stream = nullptr) {
-        constexpr int BLOCK = 256;
+        float alpha = 1.0f, beta = 0.0f;
+        cublasLtMatmul(handle, matmulDesc, &alpha, inp, Xdesc, M, Mdesc, &beta, out, Ydesc, out,
+                       Ydesc, &heuristic.algo, workspace, workspace_size, stream);
+    }
+
+    void forward_fused_distribute_add(float* out, float* H_post_activated, const float* inp,
+                                      const floatX* y_norm, const float* M, const float* H_post_raw,
+                                      float* mix_out, cudaStream_t stream = nullptr) {
+        float alpha = 1.0f, beta = 0.0f;
+        cublasLtMatmul(handle, matmulDesc, &alpha, inp, Xdesc, M, Mdesc, &beta, mix_out, Ydesc,
+                       mix_out, Ydesc, &heuristic.algo, workspace, workspace_size, stream);
+
+        constexpr int BLOCK = 256, MAX_N = 64;
         int total = B * n * C;
         int blocks = (total + BLOCK - 1) / BLOCK;
-        transpose_BnC_to_nBC_colmajor_kernel<BLOCK>
-            <<<blocks, BLOCK, 0, stream>>>(X_transposed, inp, B, n, C);
-        float alpha = 1.0f, beta = 0.0f;
-        cublasLtMatmul(handle, matmulDesc, &alpha, M, Mdesc, X_transposed, Xdesc, &beta,
-                       Y_transposed, Ydesc, Y_transposed, Ydesc, nullptr, nullptr, 0, stream);
-        transpose_nBC_colmajor_to_BnC_kernel<BLOCK>
-            <<<blocks, BLOCK, 0, stream>>>(out, Y_transposed, B, n, C);
+
+        distribute_add_fused_kernel<BLOCK, MAX_N><<<blocks, BLOCK, 0, stream>>>(
+            out, H_post_activated, mix_out, y_norm, H_post_raw, B, n, C);
     }
 };
 
@@ -285,14 +361,17 @@ inline void stream_add(float* out, const float* a, const float* b, int size,
 inline void stream_aggregate_bf16_fused_sigmoid(floatX* out, float* H_pre_activated,
                                                 const float* inp, const float* H_pre_raw, int B,
                                                 int n, int C, cudaStream_t stream = nullptr) {
-    constexpr int BLOCK = 256, MAX_N = 8;
-    int blocks = (B * C + BLOCK - 1) / BLOCK;
-    if (n <= 8) {
+    constexpr int BLOCK = 256;
+
+    // Use vectorized kernel when C is aligned to 4
+    bool use_vec4 = (C % 4 == 0) && (C >= 64);
+
+    if (use_vec4) {
+        int blocks = (B * (C / 4) + BLOCK - 1) / BLOCK;
 #ifdef MHC_ENABLE_PDL
         cudaLaunchAttribute attrs[1];
         attrs[0].id = cudaLaunchAttributeProgrammaticStreamSerialization;
         attrs[0].val.programmaticStreamSerializationAllowed = 1;
-
         cudaLaunchConfig_t config = {};
         config.numAttrs = 1;
         config.attrs = attrs;
@@ -301,14 +380,58 @@ inline void stream_aggregate_bf16_fused_sigmoid(floatX* out, float* H_pre_activa
         config.dynamicSmemBytes = 0;
         config.stream = stream;
 
-        cudaLaunchKernelEx(&config, stream_aggregate_bf16_fused_sigmoid_kernel<BLOCK, MAX_N>, out,
-                           H_pre_activated, inp, H_pre_raw, B, n, C);
+#define DISPATCH_AGGREGATE_VEC4(MAX_N_VAL)                                                         \
+    cudaLaunchKernelEx(&config, stream_aggregate_bf16_fused_sigmoid_vec4_kernel<BLOCK, MAX_N_VAL>, \
+                       out, H_pre_activated, inp, H_pre_raw, B, n, C)
 #else
-        stream_aggregate_bf16_fused_sigmoid_kernel<BLOCK, MAX_N>
-            <<<blocks, BLOCK, 0, stream>>>(out, H_pre_activated, inp, H_pre_raw, B, n, C);
+#define DISPATCH_AGGREGATE_VEC4(MAX_N_VAL)                                                         \
+    stream_aggregate_bf16_fused_sigmoid_vec4_kernel<BLOCK, MAX_N_VAL>                              \
+        <<<blocks, BLOCK, 0, stream>>>(out, H_pre_activated, inp, H_pre_raw, B, n, C)
 #endif
+        if (n <= 4) {
+            DISPATCH_AGGREGATE_VEC4(4);
+        } else if (n <= 8) {
+            DISPATCH_AGGREGATE_VEC4(8);
+        } else if (n <= 16) {
+            DISPATCH_AGGREGATE_VEC4(16);
+        } else if (n <= 32) {
+            DISPATCH_AGGREGATE_VEC4(32);
+        }
+#undef DISPATCH_AGGREGATE_VEC4
     } else {
-        fprintf(stderr, "stream_aggregate_bf16_fused_sigmoid: n > 8 not implemented\n");
+        int blocks = (B * C + BLOCK - 1) / BLOCK;
+#ifdef MHC_ENABLE_PDL
+        cudaLaunchAttribute attrs[1];
+        attrs[0].id = cudaLaunchAttributeProgrammaticStreamSerialization;
+        attrs[0].val.programmaticStreamSerializationAllowed = 1;
+        cudaLaunchConfig_t config = {};
+        config.numAttrs = 1;
+        config.attrs = attrs;
+        config.blockDim = {BLOCK, 1, 1};
+        config.gridDim = {(unsigned int)blocks, 1, 1};
+        config.dynamicSmemBytes = 0;
+        config.stream = stream;
+
+#define DISPATCH_AGGREGATE_FUSED(MAX_N_VAL)                                                        \
+    cudaLaunchKernelEx(&config, stream_aggregate_bf16_fused_sigmoid_kernel<BLOCK, MAX_N_VAL>, out, \
+                       H_pre_activated, inp, H_pre_raw, B, n, C)
+#else
+#define DISPATCH_AGGREGATE_FUSED(MAX_N_VAL)                                                        \
+    stream_aggregate_bf16_fused_sigmoid_kernel<BLOCK, MAX_N_VAL>                                   \
+        <<<blocks, BLOCK, 0, stream>>>(out, H_pre_activated, inp, H_pre_raw, B, n, C)
+#endif
+        if (n <= 4) {
+            DISPATCH_AGGREGATE_FUSED(4);
+        } else if (n <= 8) {
+            DISPATCH_AGGREGATE_FUSED(8);
+        } else if (n <= 16) {
+            DISPATCH_AGGREGATE_FUSED(16);
+        } else if (n <= 32) {
+            DISPATCH_AGGREGATE_FUSED(32);
+        } else {
+            fprintf(stderr, "stream_aggregate_bf16_fused_sigmoid: n > 32 not implemented\n");
+        }
+#undef DISPATCH_AGGREGATE_FUSED
     }
 }
 
@@ -316,59 +439,85 @@ inline void stream_distribute_from_bf16_fused_sigmoid(float* out, float* H_post_
                                                       const floatX* inp, const float* H_post_raw,
                                                       int B, int n, int C,
                                                       cudaStream_t stream = nullptr) {
-    constexpr int BLOCK = 256, MAX_N = 8;
+    constexpr int BLOCK = 256;
     int blocks = (B * n * C + BLOCK - 1) / BLOCK;
-    if (n <= 8) {
-        stream_distribute_from_bf16_fused_sigmoid_kernel<BLOCK, MAX_N>
-            <<<blocks, BLOCK, 0, stream>>>(out, H_post_activated, inp, H_post_raw, B, n, C);
+
+#ifdef MHC_ENABLE_PDL
+    cudaLaunchAttribute attrs[1];
+    attrs[0].id = cudaLaunchAttributeProgrammaticStreamSerialization;
+    attrs[0].val.programmaticStreamSerializationAllowed = 1;
+    cudaLaunchConfig_t config = {};
+    config.numAttrs = 1;
+    config.attrs = attrs;
+    config.blockDim = {BLOCK, 1, 1};
+    config.gridDim = {(unsigned int)blocks, 1, 1};
+    config.dynamicSmemBytes = 0;
+    config.stream = stream;
+
+#define DISPATCH_DISTRIBUTE_FUSED(MAX_N_VAL)                                                       \
+    cudaLaunchKernelEx(&config,                                                                    \
+                       stream_distribute_from_bf16_fused_sigmoid_kernel<BLOCK, MAX_N_VAL>, out,    \
+                       H_post_activated, inp, H_post_raw, B, n, C)
+#else
+#define DISPATCH_DISTRIBUTE_FUSED(MAX_N_VAL)                                                       \
+    stream_distribute_from_bf16_fused_sigmoid_kernel<BLOCK, MAX_N_VAL>                             \
+        <<<blocks, BLOCK, 0, stream>>>(out, H_post_activated, inp, H_post_raw, B, n, C)
+#endif
+
+    if (n <= 4) {
+        DISPATCH_DISTRIBUTE_FUSED(4);
+    } else if (n <= 8) {
+        DISPATCH_DISTRIBUTE_FUSED(8);
+    } else if (n <= 16) {
+        DISPATCH_DISTRIBUTE_FUSED(16);
+    } else if (n <= 32) {
+        DISPATCH_DISTRIBUTE_FUSED(32);
     } else {
-        fprintf(stderr, "stream_distribute_from_bf16_fused_sigmoid: n > 8 not implemented\n");
+        fprintf(stderr, "stream_distribute_from_bf16_fused_sigmoid: n > 32 not implemented\n");
     }
+#undef DISPATCH_DISTRIBUTE_FUSED
 }
 
 inline void stream_distribute_mix_add_fused(float* out, float* H_post_activated, const float* x_inp,
                                             const floatX* y_norm, const float* H_post_raw,
                                             const float* M, int B, int n, int C,
                                             cudaStream_t stream = nullptr) {
-    constexpr int BLOCK = 256, MAX_N = 8;
-    if (n <= 8) {
+    constexpr int BLOCK = 256;
+    int blocks = (B * n * C + BLOCK - 1) / BLOCK;
+
 #ifdef MHC_ENABLE_PDL
-        cudaLaunchAttribute attrs[1];
-        attrs[0].id = cudaLaunchAttributeProgrammaticStreamSerialization;
-        attrs[0].val.programmaticStreamSerializationAllowed = 1;
+    cudaLaunchAttribute attrs[1];
+    attrs[0].id = cudaLaunchAttributeProgrammaticStreamSerialization;
+    attrs[0].val.programmaticStreamSerializationAllowed = 1;
+    cudaLaunchConfig_t config = {};
+    config.numAttrs = 1;
+    config.attrs = attrs;
+    config.blockDim = {BLOCK, 1, 1};
+    config.gridDim = {(unsigned int)blocks, 1, 1};
+    config.dynamicSmemBytes = 0;
+    config.stream = stream;
 
-        cudaLaunchConfig_t config = {};
-        config.numAttrs = 1;
-        config.attrs = attrs;
-        config.blockDim = {BLOCK, 1, 1};
-        config.dynamicSmemBytes = 0;
-        config.stream = stream;
-
-        if (C % 4 == 0 && C >= 64) {
-            int blocks = (B * n * (C / 4) + BLOCK - 1) / BLOCK;
-            config.gridDim = {(unsigned int)blocks, 1, 1};
-            cudaLaunchKernelEx(&config, stream_distribute_mix_add_fused_vec4_kernel<BLOCK, MAX_N>,
-                               out, H_post_activated, x_inp, y_norm, H_post_raw, M, B, n, C);
-        } else {
-            int blocks = (B * n * C + BLOCK - 1) / BLOCK;
-            config.gridDim = {(unsigned int)blocks, 1, 1};
-            cudaLaunchKernelEx(&config, stream_distribute_mix_add_fused_kernel<BLOCK, MAX_N>, out,
-                               H_post_activated, x_inp, y_norm, H_post_raw, M, B, n, C);
-        }
+#define DISPATCH_MIX_ADD_FUSED(MAX_N_VAL)                                                          \
+    cudaLaunchKernelEx(&config, stream_distribute_mix_add_fused_kernel<BLOCK, MAX_N_VAL>, out,     \
+                       H_post_activated, x_inp, y_norm, H_post_raw, M, B, n, C)
 #else
-        if (C % 4 == 0 && C >= 64) {
-            int blocks = (B * n * (C / 4) + BLOCK - 1) / BLOCK;
-            stream_distribute_mix_add_fused_vec4_kernel<BLOCK, MAX_N><<<blocks, BLOCK, 0, stream>>>(
-                out, H_post_activated, x_inp, y_norm, H_post_raw, M, B, n, C);
-        } else {
-            int blocks = (B * n * C + BLOCK - 1) / BLOCK;
-            stream_distribute_mix_add_fused_kernel<BLOCK, MAX_N><<<blocks, BLOCK, 0, stream>>>(
-                out, H_post_activated, x_inp, y_norm, H_post_raw, M, B, n, C);
-        }
+#define DISPATCH_MIX_ADD_FUSED(MAX_N_VAL)                                                          \
+    stream_distribute_mix_add_fused_kernel<BLOCK, MAX_N_VAL><<<blocks, BLOCK, 0, stream>>>(        \
+        out, H_post_activated, x_inp, y_norm, H_post_raw, M, B, n, C)
 #endif
+
+    if (n <= 4) {
+        DISPATCH_MIX_ADD_FUSED(4);
+    } else if (n <= 8) {
+        DISPATCH_MIX_ADD_FUSED(8);
+    } else if (n <= 16) {
+        DISPATCH_MIX_ADD_FUSED(16);
+    } else if (n <= 32) {
+        DISPATCH_MIX_ADD_FUSED(32);
     } else {
-        fprintf(stderr, "stream_distribute_mix_add_fused: n > 8 not implemented\n");
+        fprintf(stderr, "stream_distribute_mix_add_fused: n > 32 not implemented\n");
     }
+#undef DISPATCH_MIX_ADD_FUSED
 }
 
 inline void stream_mix_large(float* out, const float* inp, const float* M, int B, int n, int C,
@@ -400,6 +549,38 @@ stream_aggregate_bf16_dynamic_kernel(floatX* __restrict__ out, const float* __re
 }
 
 template<int BLOCK_SIZE, int MAX_N>
+__global__ void
+stream_aggregate_bf16_dynamic_vec4_kernel(floatX* __restrict__ out, const float* __restrict__ inp,
+                                          const float* __restrict__ H_pre, int B, int n, int C) {
+    int idx4 = blockIdx.x * BLOCK_SIZE + threadIdx.x;
+    int C4 = C / 4;
+    if (idx4 >= B * C4)
+        return;
+
+    int b = idx4 / C4;
+    int c4 = idx4 % C4;
+    int c = c4 * 4;
+    const float* h = H_pre + b * n;
+
+    float4 sum = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+#pragma unroll
+    for (int i = 0; i < MAX_N; i++) {
+        if (i < n) {
+            float hi = h[i];
+            const float4* inp4 = reinterpret_cast<const float4*>(&inp[b * n * C + i * C + c]);
+            float4 v = *inp4;
+            sum.x += hi * v.x;
+            sum.y += hi * v.y;
+            sum.z += hi * v.z;
+            sum.w += hi * v.w;
+        }
+    }
+    __nv_bfloat162* out2 = reinterpret_cast<__nv_bfloat162*>(&out[b * C + c]);
+    out2[0] = __floats2bfloat162_rn(sum.x, sum.y);
+    out2[1] = __floats2bfloat162_rn(sum.z, sum.w);
+}
+
+template<int BLOCK_SIZE, int MAX_N>
 __global__ void stream_distribute_mix_add_dynamic_kernel(
     float* __restrict__ out, const float* __restrict__ x_inp, const floatX* __restrict__ y_norm,
     const float* __restrict__ H_post, const float* __restrict__ M, int B, int n, int C) {
@@ -426,14 +607,15 @@ __global__ void stream_distribute_mix_add_dynamic_kernel(
 
 inline void stream_aggregate_bf16_dynamic(floatX* out, const float* inp, const float* H_pre, int B,
                                           int n, int C, cudaStream_t stream = nullptr) {
-    constexpr int BLOCK = 256, MAX_N = 8;
-    int blocks = (B * C + BLOCK - 1) / BLOCK;
-    if (n <= 8) {
+    constexpr int BLOCK = 256;
+    bool use_vec4 = (C % 4 == 0) && (C >= 64);
+
+    if (use_vec4) {
+        int blocks = (B * (C / 4) + BLOCK - 1) / BLOCK;
 #ifdef MHC_ENABLE_PDL
         cudaLaunchAttribute attrs[1];
         attrs[0].id = cudaLaunchAttributeProgrammaticStreamSerialization;
         attrs[0].val.programmaticStreamSerializationAllowed = 1;
-
         cudaLaunchConfig_t config = {};
         config.numAttrs = 1;
         config.attrs = attrs;
@@ -442,14 +624,58 @@ inline void stream_aggregate_bf16_dynamic(floatX* out, const float* inp, const f
         config.dynamicSmemBytes = 0;
         config.stream = stream;
 
-        cudaLaunchKernelEx(&config, stream_aggregate_bf16_dynamic_kernel<BLOCK, MAX_N>, out, inp,
-                           H_pre, B, n, C);
+#define DISPATCH_AGGREGATE_DYN_VEC4(MAX_N_VAL)                                                     \
+    cudaLaunchKernelEx(&config, stream_aggregate_bf16_dynamic_vec4_kernel<BLOCK, MAX_N_VAL>, out,  \
+                       inp, H_pre, B, n, C)
 #else
-        stream_aggregate_bf16_dynamic_kernel<BLOCK, MAX_N>
-            <<<blocks, BLOCK, 0, stream>>>(out, inp, H_pre, B, n, C);
+#define DISPATCH_AGGREGATE_DYN_VEC4(MAX_N_VAL)                                                     \
+    stream_aggregate_bf16_dynamic_vec4_kernel<BLOCK, MAX_N_VAL>                                    \
+        <<<blocks, BLOCK, 0, stream>>>(out, inp, H_pre, B, n, C)
 #endif
+        if (n <= 4) {
+            DISPATCH_AGGREGATE_DYN_VEC4(4);
+        } else if (n <= 8) {
+            DISPATCH_AGGREGATE_DYN_VEC4(8);
+        } else if (n <= 16) {
+            DISPATCH_AGGREGATE_DYN_VEC4(16);
+        } else if (n <= 32) {
+            DISPATCH_AGGREGATE_DYN_VEC4(32);
+        }
+#undef DISPATCH_AGGREGATE_DYN_VEC4
     } else {
-        fprintf(stderr, "stream_aggregate_bf16_dynamic: n > 8 not implemented\n");
+        int blocks = (B * C + BLOCK - 1) / BLOCK;
+#ifdef MHC_ENABLE_PDL
+        cudaLaunchAttribute attrs[1];
+        attrs[0].id = cudaLaunchAttributeProgrammaticStreamSerialization;
+        attrs[0].val.programmaticStreamSerializationAllowed = 1;
+        cudaLaunchConfig_t config = {};
+        config.numAttrs = 1;
+        config.attrs = attrs;
+        config.blockDim = {BLOCK, 1, 1};
+        config.gridDim = {(unsigned int)blocks, 1, 1};
+        config.dynamicSmemBytes = 0;
+        config.stream = stream;
+
+#define DISPATCH_AGGREGATE_DYN(MAX_N_VAL)                                                          \
+    cudaLaunchKernelEx(&config, stream_aggregate_bf16_dynamic_kernel<BLOCK, MAX_N_VAL>, out, inp,  \
+                       H_pre, B, n, C)
+#else
+#define DISPATCH_AGGREGATE_DYN(MAX_N_VAL)                                                          \
+    stream_aggregate_bf16_dynamic_kernel<BLOCK, MAX_N_VAL>                                         \
+        <<<blocks, BLOCK, 0, stream>>>(out, inp, H_pre, B, n, C)
+#endif
+        if (n <= 4) {
+            DISPATCH_AGGREGATE_DYN(4);
+        } else if (n <= 8) {
+            DISPATCH_AGGREGATE_DYN(8);
+        } else if (n <= 16) {
+            DISPATCH_AGGREGATE_DYN(16);
+        } else if (n <= 32) {
+            DISPATCH_AGGREGATE_DYN(32);
+        } else {
+            fprintf(stderr, "stream_aggregate_bf16_dynamic: n > 32 not implemented\n");
+        }
+#undef DISPATCH_AGGREGATE_DYN
     }
 }
 
@@ -457,31 +683,42 @@ inline void stream_distribute_mix_add_fused_dynamic(float* out, const float* x_i
                                                     const floatX* y_norm, const float* H_post,
                                                     const float* M, int B, int n, int C,
                                                     cudaStream_t stream = nullptr) {
-    constexpr int BLOCK = 256, MAX_N = 8;
+    constexpr int BLOCK = 256;
     int blocks = (B * n * C + BLOCK - 1) / BLOCK;
-    if (n <= 8) {
+
 #ifdef MHC_ENABLE_PDL
-        cudaLaunchAttribute attrs[1];
-        attrs[0].id = cudaLaunchAttributeProgrammaticStreamSerialization;
-        attrs[0].val.programmaticStreamSerializationAllowed = 1;
+    cudaLaunchAttribute attrs[1];
+    attrs[0].id = cudaLaunchAttributeProgrammaticStreamSerialization;
+    attrs[0].val.programmaticStreamSerializationAllowed = 1;
+    cudaLaunchConfig_t config = {};
+    config.numAttrs = 1;
+    config.attrs = attrs;
+    config.blockDim = {BLOCK, 1, 1};
+    config.gridDim = {(unsigned int)blocks, 1, 1};
+    config.dynamicSmemBytes = 0;
+    config.stream = stream;
 
-        cudaLaunchConfig_t config = {};
-        config.numAttrs = 1;
-        config.attrs = attrs;
-        config.blockDim = {BLOCK, 1, 1};
-        config.gridDim = {(unsigned int)blocks, 1, 1};
-        config.dynamicSmemBytes = 0;
-        config.stream = stream;
-
-        cudaLaunchKernelEx(&config, stream_distribute_mix_add_dynamic_kernel<BLOCK, MAX_N>, out,
-                           x_inp, y_norm, H_post, M, B, n, C);
+#define DISPATCH_MIX_ADD_DYN(MAX_N_VAL)                                                            \
+    cudaLaunchKernelEx(&config, stream_distribute_mix_add_dynamic_kernel<BLOCK, MAX_N_VAL>, out,   \
+                       x_inp, y_norm, H_post, M, B, n, C)
 #else
-        stream_distribute_mix_add_dynamic_kernel<BLOCK, MAX_N>
-            <<<blocks, BLOCK, 0, stream>>>(out, x_inp, y_norm, H_post, M, B, n, C);
+#define DISPATCH_MIX_ADD_DYN(MAX_N_VAL)                                                            \
+    stream_distribute_mix_add_dynamic_kernel<BLOCK, MAX_N_VAL>                                     \
+        <<<blocks, BLOCK, 0, stream>>>(out, x_inp, y_norm, H_post, M, B, n, C)
 #endif
+
+    if (n <= 4) {
+        DISPATCH_MIX_ADD_DYN(4);
+    } else if (n <= 8) {
+        DISPATCH_MIX_ADD_DYN(8);
+    } else if (n <= 16) {
+        DISPATCH_MIX_ADD_DYN(16);
+    } else if (n <= 32) {
+        DISPATCH_MIX_ADD_DYN(32);
     } else {
-        fprintf(stderr, "stream_distribute_mix_add_fused_dynamic: n > 8 not implemented\n");
+        fprintf(stderr, "stream_distribute_mix_add_fused_dynamic: n > 32 not implemented\n");
     }
+#undef DISPATCH_MIX_ADD_DYN
 }
 
 template<int BLOCK_SIZE, int MAX_N>
@@ -575,14 +812,29 @@ inline void stream_aggregate_backward(float* d_inp, float* d_H_pre, const float*
                                       const float* inp, const float* H_pre, int B, int n, int C,
                                       float* workspace, int workspace_num_blocks,
                                       cudaStream_t stream = nullptr) {
-    constexpr int BLOCK = 256, MAX_N = 8;
+    constexpr int BLOCK = 256;
     int blocks_dx = (B * n * C + BLOCK - 1) / BLOCK;
-    stream_aggregate_backward_dx_kernel<BLOCK, MAX_N>
-        <<<blocks_dx, BLOCK, 0, stream>>>(d_inp, grad, H_pre, B, n, C);
-    stream_aggregate_backward_dH_partial_kernel<BLOCK, MAX_N>
-        <<<workspace_num_blocks, BLOCK, 0, stream>>>(workspace, grad, inp, B, n, C);
-    reduce_partials_kernel<MAX_N>
-        <<<n, 128, 0, stream>>>(d_H_pre, workspace, n, workspace_num_blocks);
+
+#define DISPATCH_AGG_BWD(MAX_N_VAL)                                                                \
+    stream_aggregate_backward_dx_kernel<BLOCK, MAX_N_VAL>                                          \
+        <<<blocks_dx, BLOCK, 0, stream>>>(d_inp, grad, H_pre, B, n, C);                            \
+    stream_aggregate_backward_dH_partial_kernel<BLOCK, MAX_N_VAL>                                  \
+        <<<workspace_num_blocks, BLOCK, 0, stream>>>(workspace, grad, inp, B, n, C);               \
+    reduce_partials_kernel<MAX_N_VAL>                                                              \
+        <<<n, 128, 0, stream>>>(d_H_pre, workspace, n, workspace_num_blocks)
+
+    if (n <= 4) {
+        DISPATCH_AGG_BWD(4);
+    } else if (n <= 8) {
+        DISPATCH_AGG_BWD(8);
+    } else if (n <= 16) {
+        DISPATCH_AGG_BWD(16);
+    } else if (n <= 32) {
+        DISPATCH_AGG_BWD(32);
+    } else {
+        fprintf(stderr, "stream_aggregate_backward: n > 32 not implemented\n");
+    }
+#undef DISPATCH_AGG_BWD
 }
 
 template<int BLOCK_SIZE, int MAX_N>
@@ -788,25 +1040,40 @@ inline void stream_distribute_mix_backward_fused(float* d_x, float* d_y_norm, fl
                                                  float* workspace_M, float* workspace_H,
                                                  int workspace_num_blocks,
                                                  cudaStream_t stream = nullptr) {
-    constexpr int BLOCK = 256, MAX_N = 8;
+    constexpr int BLOCK = 256;
 
-    if (C % 4 == 0 && C >= 64) {
-        int blocks = (B * n * (C / 4) + BLOCK - 1) / BLOCK;
-        stream_distribute_mix_backward_dx_dy_vec4_kernel<BLOCK, MAX_N>
-            <<<blocks, BLOCK, 0, stream>>>(d_x, d_y_norm, grad, M, H_post, B, n, C);
+#define DISPATCH_DIST_BWD(MAX_N_VAL)                                                               \
+    do {                                                                                           \
+        if (C % 4 == 0 && C >= 64 && n <= 8) {                                                     \
+            int blocks = (B * n * (C / 4) + BLOCK - 1) / BLOCK;                                    \
+            stream_distribute_mix_backward_dx_dy_vec4_kernel<BLOCK, MAX_N_VAL>                     \
+                <<<blocks, BLOCK, 0, stream>>>(d_x, d_y_norm, grad, M, H_post, B, n, C);           \
+        } else {                                                                                   \
+            int blocks = (B * n * C + BLOCK - 1) / BLOCK;                                          \
+            stream_distribute_mix_backward_dx_dy_kernel<BLOCK, MAX_N_VAL>                          \
+                <<<blocks, BLOCK, 0, stream>>>(d_x, d_y_norm, grad, M, H_post, B, n, C);           \
+        }                                                                                          \
+        stream_distribute_mix_backward_partials_kernel<BLOCK, MAX_N_VAL>                           \
+            <<<workspace_num_blocks, BLOCK, 0, stream>>>(workspace_M, workspace_H, grad, x,        \
+                                                         y_norm, B, n, C);                         \
+        reduce_partials_matrix_kernel<MAX_N_VAL>                                                   \
+            <<<n * n, 128, 0, stream>>>(d_M, workspace_M, n, workspace_num_blocks);                \
+        reduce_partials_kernel<MAX_N_VAL>                                                          \
+            <<<n, 128, 0, stream>>>(d_H_post, workspace_H, n, workspace_num_blocks);               \
+    } while (0)
+
+    if (n <= 4) {
+        DISPATCH_DIST_BWD(4);
+    } else if (n <= 8) {
+        DISPATCH_DIST_BWD(8);
+    } else if (n <= 16) {
+        DISPATCH_DIST_BWD(16);
+    } else if (n <= 32) {
+        DISPATCH_DIST_BWD(32);
     } else {
-        int blocks = (B * n * C + BLOCK - 1) / BLOCK;
-        stream_distribute_mix_backward_dx_dy_kernel<BLOCK, MAX_N>
-            <<<blocks, BLOCK, 0, stream>>>(d_x, d_y_norm, grad, M, H_post, B, n, C);
+        fprintf(stderr, "stream_distribute_mix_backward_fused: n > 32 not implemented\n");
     }
-
-    stream_distribute_mix_backward_partials_kernel<BLOCK, MAX_N>
-        <<<workspace_num_blocks, BLOCK, 0, stream>>>(workspace_M, workspace_H, grad, x, y_norm, B,
-                                                     n, C);
-    reduce_partials_matrix_kernel<MAX_N>
-        <<<n * n, 128, 0, stream>>>(d_M, workspace_M, n, workspace_num_blocks);
-    reduce_partials_kernel<MAX_N>
-        <<<n, 128, 0, stream>>>(d_H_post, workspace_H, n, workspace_num_blocks);
+#undef DISPATCH_DIST_BWD
 }
 
 } // namespace mhc

@@ -146,31 +146,34 @@ class NaiveMHCLayerDynamic(nn.Module):
 
 
 def benchmark_forward(layer, B, n, C, device, cleaner, warmup=10, runs=100):
-    for _ in range(warmup):
-        x = torch.randn(B, n, C, device=device, dtype=torch.float32)
-        _ = layer(x)
-        del x
-    torch.cuda.synchronize()
+    layer.eval()
 
-    torch.cuda.empty_cache()
-
-    times = []
-    for _ in range(runs):
-        x = torch.randn(B, n, C, device=device, dtype=torch.float32)
-
-        cleaner.clear()
-
-        start_event = torch.cuda.Event(enable_timing=True)
-        end_event = torch.cuda.Event(enable_timing=True)
-
-        start_event.record()
-        _ = layer(x)
-        end_event.record()
-
+    with torch.no_grad():
+        for _ in range(warmup):
+            x = torch.randn(B, n, C, device=device, dtype=torch.float32)
+            _ = layer(x)
+            del x
         torch.cuda.synchronize()
-        times.append(start_event.elapsed_time(end_event))
 
-        del x
+        torch.cuda.empty_cache()
+
+        times = []
+        for _ in range(runs):
+            x = torch.randn(B, n, C, device=device, dtype=torch.float32)
+
+            cleaner.clear()
+
+            start_event = torch.cuda.Event(enable_timing=True)
+            end_event = torch.cuda.Event(enable_timing=True)
+
+            start_event.record()
+            _ = layer(x)
+            end_event.record()
+
+            torch.cuda.synchronize()
+            times.append(start_event.elapsed_time(end_event))
+
+            del x
 
     times = sorted(times)
     trim = runs // 10
@@ -263,6 +266,11 @@ def main():
             (512, 1920, 4),
             (1280, 2560, 4),
             (2560, 1280, 4),
+            (128, 1280, 8),
+            (256, 1280, 8),
+            (32, 1280, 32),
+            (64, 1280, 32),
+            (128, 1280, 32),
         ]
     else:
         configs = [(args.batch, args.hidden, args.expansion)]

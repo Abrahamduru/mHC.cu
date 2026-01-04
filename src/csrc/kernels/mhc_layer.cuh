@@ -29,6 +29,7 @@ struct MHCLayerConfig {
 struct MHCLayerWeights {
     floatX* rmsnorm_weight;
 
+    floatX* phi_combined;
     floatX* phi_pre;
     floatX* phi_post;
     floatX* phi_res;
@@ -46,7 +47,7 @@ struct MHCLayerWeights {
     int hidden_dim;
     int expansion_rate;
 
-    MHCLayerWeights() : initialized(false), dynamic_h(true) {}
+    MHCLayerWeights() : initialized(false), dynamic_h(true), phi_combined(nullptr) {}
 
     void init(int C, int n, bool use_dynamic = true, float alpha_init = 0.01f) {
         hidden_dim = C;
@@ -57,10 +58,13 @@ struct MHCLayerWeights {
 
         if (dynamic_h) {
             int nC = n * C;
-            CHECK_CUDA(cudaMalloc(&phi_pre, nC * n * sizeof(floatX)));
-            CHECK_CUDA(cudaMalloc(&phi_post, nC * n * sizeof(floatX)));
-            CHECK_CUDA(cudaMalloc(&phi_res, nC * n * n * sizeof(floatX)));
+            int total_H_dim = n + n + n * n;
+            CHECK_CUDA(cudaMalloc(&phi_combined, total_H_dim * nC * sizeof(floatX)));
+            phi_pre = phi_combined;
+            phi_post = phi_combined + n * nC;
+            phi_res = phi_combined + 2 * n * nC;
         } else {
+            phi_combined = nullptr;
             phi_pre = nullptr;
             phi_post = nullptr;
             phi_res = nullptr;
@@ -83,9 +87,7 @@ struct MHCLayerWeights {
 
         cudaFree(rmsnorm_weight);
         if (dynamic_h) {
-            cudaFree(phi_pre);
-            cudaFree(phi_post);
-            cudaFree(phi_res);
+            cudaFree(phi_combined);
         }
         cudaFree(b_pre);
         cudaFree(b_post);
@@ -284,7 +286,7 @@ __global__ void sigmoid_kernel(float* __restrict__ out, const float* __restrict_
     int idx = blockIdx.x * BLOCK_SIZE + threadIdx.x;
     if (idx < size) {
         float x = inp[idx];
-        out[idx] = 1.0f / (1.0f + expf(-x));
+        out[idx] = fast_sigmoid(-x);
     }
 }
 
@@ -302,7 +304,7 @@ template<int BLOCK_SIZE>
 __global__ void exp_kernel(float* __restrict__ out, const float* __restrict__ inp, int size) {
     int idx = blockIdx.x * BLOCK_SIZE + threadIdx.x;
     if (idx < size) {
-        out[idx] = expf(inp[idx]);
+        out[idx] = fast_exp(inp[idx]);
     }
 }
 
@@ -569,20 +571,17 @@ struct MHCLayer {
 
         float_to_bf16(buffers.x_flat_bf16, buffers.x_expanded, B * nC, stream);
 
-        floatX* phi_combined = weights.phi_pre;
-        buffers.fused_rms_matmul.forward(buffers.H_proj_raw, buffers.x_flat_bf16, phi_combined,
-                                         stream);
+        buffers.fused_rms_matmul.forward(buffers.H_proj_raw, buffers.x_flat_bf16,
+                                         weights.phi_combined, stream);
 
         apply_dynamic_h_activations(buffers.H_pre_activated, buffers.H_post_activated,
                                     buffers.H_res_tilde, buffers.H_proj_raw, weights.b_pre,
                                     weights.b_post, weights.b_res, weights.alpha_pre,
                                     weights.alpha_post, weights.alpha_res, B, n, stream);
 
-        for (int b = 0; b < B; b++) {
-            sinkhorn_knopp_forward_fused_exp(buffers.sinkhorn_M + b * n * n, nullptr,
-                                             buffers.H_res_tilde + b * n * n, n, n,
-                                             config.sinkhorn_iters, config.eps, stream);
-        }
+        apply_exp(buffers.H_res_tilde, buffers.H_res_tilde, B * n * n, stream);
+        sinkhorn_knopp_forward_batched(buffers.sinkhorn_M, buffers.H_res_tilde, B, n,
+                                       config.sinkhorn_iters, config.eps, stream);
     }
 
     void forward(const float* x_expanded) {
@@ -628,13 +627,10 @@ struct MHCLayer {
                 buffers.H_post_activated, buffers.sinkhorn_M, B, n, C, stream);
         } else {
             if (use_tc_mix) {
-                stream_distribute_from_bf16_fused_sigmoid(
-                    buffers.y_distributed, buffers.H_post_activated, buffers.layer_out_bf16,
-                    weights.b_post, B, n, C, stream);
-                stream_mix_tc.forward(buffers.x_mixed, buffers.x_expanded, buffers.sinkhorn_M,
-                                      stream);
-                stream_add(buffers.output, buffers.x_mixed, buffers.y_distributed, B * n * C,
-                           stream);
+                stream_mix_tc.forward_fused_distribute_add(
+                    buffers.output, buffers.H_post_activated, buffers.x_expanded,
+                    buffers.layer_out_bf16, buffers.sinkhorn_M, weights.b_post, buffers.x_mixed,
+                    stream);
             } else {
                 stream_distribute_mix_add_fused(
                     buffers.output, buffers.H_post_activated, buffers.x_expanded,
@@ -686,13 +682,10 @@ struct MHCLayer {
                 buffers.H_post_activated, buffers.sinkhorn_M, B, n, C, stream);
         } else {
             if (use_tc_mix) {
-                stream_distribute_from_bf16_fused_sigmoid(
-                    buffers.y_distributed, buffers.H_post_activated, buffers.layer_out_bf16,
-                    weights.b_post, B, n, C, stream);
-                stream_mix_tc.forward(buffers.x_mixed, buffers.x_expanded, buffers.sinkhorn_M,
-                                      stream);
-                stream_add(buffers.output, buffers.x_mixed, buffers.y_distributed, B * n * C,
-                           stream);
+                stream_mix_tc.forward_fused_distribute_add(
+                    buffers.output, buffers.H_post_activated, buffers.x_expanded,
+                    buffers.layer_out_bf16, buffers.sinkhorn_M, weights.b_post, buffers.x_mixed,
+                    stream);
             } else {
                 stream_distribute_mix_add_fused(
                     buffers.output, buffers.H_post_activated, buffers.x_expanded,
