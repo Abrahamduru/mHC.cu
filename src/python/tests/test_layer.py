@@ -146,7 +146,9 @@ def test_layer_dynamic_matches_naive_small():
     from mhc import MHCLayer
 
     B, n, C = 2, 4, 16
-    layer = MHCLayer(hidden_dim=C, expansion_rate=n, sinkhorn_iters=3, use_dynamic_h=True).cuda()
+    layer = MHCLayer(
+        hidden_dim=C, expansion_rate=n, sinkhorn_iters=3, use_dynamic_h=True
+    ).cuda()
 
     x = torch.randn(B, n, C, device="cuda", requires_grad=True)
     out_fused = layer(x)
@@ -184,11 +186,11 @@ def test_layer_dynamic_matches_naive_small():
     )
     out_ref.sum().backward()
 
-    torch.testing.assert_close(out_fused.detach(), out_ref.detach(), rtol=5e-2, atol=5e-2)
-    torch.testing.assert_close(fused_x_grad, x_ref.grad, rtol=1e-1, atol=1e-1)
     torch.testing.assert_close(
-        fused_phi_res_grad, phi_res.grad, rtol=1e-1, atol=1e-1
+        out_fused.detach(), out_ref.detach(), rtol=5e-2, atol=5e-2
     )
+    torch.testing.assert_close(fused_x_grad, x_ref.grad, rtol=1e-1, atol=1e-1)
+    torch.testing.assert_close(fused_phi_res_grad, phi_res.grad, rtol=1e-1, atol=1e-1)
 
 
 def test_layer_parameters_static():

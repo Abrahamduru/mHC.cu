@@ -175,11 +175,17 @@ class MHCLayerDynamicFunction(Function):
             .bfloat16()
             .contiguous()
         )
-        alpha_pre_val = float(alpha_pre.item()) if torch.is_tensor(alpha_pre) else float(alpha_pre)
-        alpha_post_val = (
-            float(alpha_post.item()) if torch.is_tensor(alpha_post) else float(alpha_post)
+        alpha_pre_val = (
+            float(alpha_pre.item()) if torch.is_tensor(alpha_pre) else float(alpha_pre)
         )
-        alpha_res_val = float(alpha_res.item()) if torch.is_tensor(alpha_res) else float(alpha_res)
+        alpha_post_val = (
+            float(alpha_post.item())
+            if torch.is_tensor(alpha_post)
+            else float(alpha_post)
+        )
+        alpha_res_val = (
+            float(alpha_res.item()) if torch.is_tensor(alpha_res) else float(alpha_res)
+        )
 
         (
             output,
@@ -331,8 +337,12 @@ class MHCLayerDynamicFunction(Function):
             d_x_flat += d_p_post @ phi_post_f32
             d_x_flat += d_p_res_flat @ phi_res_f32
 
-            d_r = -(d_tilde_pre * (alpha_pre_f32 * p_pre) * rms_inv2[:, None]).sum(dim=1)
-            d_r -= (d_tilde_post * (alpha_post_f32 * p_post) * rms_inv2[:, None]).sum(dim=1)
+            d_r = -(d_tilde_pre * (alpha_pre_f32 * p_pre) * rms_inv2[:, None]).sum(
+                dim=1
+            )
+            d_r -= (d_tilde_post * (alpha_post_f32 * p_post) * rms_inv2[:, None]).sum(
+                dim=1
+            )
             d_r -= (d_tilde_res * (alpha_res_f32 * p_res) * rms_inv2.view(B, 1, 1)).sum(
                 dim=(1, 2)
             )
@@ -385,7 +395,9 @@ def mhc_layer_fused_dynamic(
     if not torch.is_tensor(alpha_pre):
         alpha_pre = torch.tensor(alpha_pre, device=phi_pre.device, dtype=phi_pre.dtype)
     if not torch.is_tensor(alpha_post):
-        alpha_post = torch.tensor(alpha_post, device=phi_pre.device, dtype=phi_pre.dtype)
+        alpha_post = torch.tensor(
+            alpha_post, device=phi_pre.device, dtype=phi_pre.dtype
+        )
     if not torch.is_tensor(alpha_res):
         alpha_res = torch.tensor(alpha_res, device=phi_pre.device, dtype=phi_pre.dtype)
     return MHCLayerDynamicFunction.apply(
